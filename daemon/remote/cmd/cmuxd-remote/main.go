@@ -12,11 +12,13 @@ import (
 	"math"
 	"net"
 	"os"
+	"os/signal"
 	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 )
 
@@ -123,17 +125,40 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		fs := flag.NewFlagSet("serve", flag.ContinueOnError)
 		fs.SetOutput(stderr)
 		stdio := fs.Bool("stdio", false, "serve over stdin/stdout")
+		listen := fs.String("listen", "", "WebSocket listen address (e.g. :19285)")
+		cmuxSocket := fs.String("cmux-socket", "", "path to cmux.sock (auto-detect if empty)")
+		authToken := fs.String("token", "", "auth token for WebSocket clients")
 		if err := fs.Parse(args[1:]); err != nil {
 			return 2
 		}
-		if !*stdio {
-			_, _ = fmt.Fprintln(stderr, "serve requires --stdio")
+
+		if !*stdio && *listen == "" {
+			_, _ = fmt.Fprintln(stderr, "serve requires --stdio and/or --listen")
 			return 2
 		}
-		if err := runStdioServer(stdin, stdout); err != nil {
-			_, _ = fmt.Fprintf(stderr, "serve failed: %v\n", err)
-			return 1
+
+		socketPath := cmuxSocketFromFlag(*cmuxSocket)
+
+		if *listen != "" {
+			go func() {
+				if err := runWSServer(*listen, socketPath, *authToken); err != nil {
+					_, _ = fmt.Fprintf(stderr, "WebSocket server failed: %v\n", err)
+				}
+			}()
 		}
+
+		if *stdio {
+			if err := runStdioServer(stdin, stdout); err != nil {
+				_, _ = fmt.Fprintf(stderr, "serve failed: %v\n", err)
+				return 1
+			}
+			return 0
+		}
+
+		// WebSocket-only mode: block until signal.
+		sigCh := make(chan os.Signal, 1)
+		signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
+		<-sigCh
 		return 0
 	case "cli":
 		return runCLI(args[1:])
@@ -147,6 +172,8 @@ func usage(w io.Writer) {
 	_, _ = fmt.Fprintln(w, "Usage:")
 	_, _ = fmt.Fprintln(w, "  cmuxd-remote version")
 	_, _ = fmt.Fprintln(w, "  cmuxd-remote serve --stdio")
+	_, _ = fmt.Fprintln(w, "  cmuxd-remote serve --listen :19285 [--cmux-socket path] [--token secret]")
+	_, _ = fmt.Fprintln(w, "  cmuxd-remote serve --stdio --listen :19285")
 	_, _ = fmt.Fprintln(w, "  cmuxd-remote cli <command> [args...]")
 }
 
