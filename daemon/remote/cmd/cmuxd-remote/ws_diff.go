@@ -4,7 +4,7 @@ package main
 // Operations: "replace" (line + text), "append" (text only), "delete" (line + count).
 type lineChange struct {
 	Op    string `json:"op"`
-	Line  int    `json:"line,omitempty"`
+	Line  int    `json:"line"`
 	Text  string `json:"text,omitempty"`
 	Count int    `json:"count,omitempty"`
 }
