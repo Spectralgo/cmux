@@ -48,3 +48,8 @@ tests/visual_report.html
 tmp/
 tmp-*/
 daemon/remote/cmuxd-remote
+
+# Gas Town runtime artifacts
+.beads/
+.runtime/
+.claude/commands/
