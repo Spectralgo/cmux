@@ -7,8 +7,13 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"sync"
 	"time"
 )
+
+// cmuxSocketMu serializes access to cmux.sock — the Unix socket is not safe
+// for concurrent writers (interleaved JSON lines corrupt the stream).
+var cmuxSocketMu sync.Mutex
 
 // findCmuxSocket auto-discovers the cmux.sock path using a priority chain:
 // 1. CMUX_SOCKET_PATH env
@@ -45,6 +50,9 @@ func findCmuxSocket() string {
 // Uses a 5s total deadline and always reads the full response before closing
 // (SIGPIPE prevention per doc 29 CF-2).
 func cmuxCall(socketPath, method string, params map[string]any) (json.RawMessage, error) {
+	cmuxSocketMu.Lock()
+	defer cmuxSocketMu.Unlock()
+
 	conn, err := net.DialTimeout("unix", socketPath, 2*time.Second)
 	if err != nil {
 		return nil, fmt.Errorf("cmuxCall: dial %s: %w", socketPath, err)
@@ -86,7 +94,11 @@ func cmuxCall(socketPath, method string, params map[string]any) (json.RawMessage
 		Error  *rpcError       `json:"error,omitempty"`
 	}
 	if err := json.Unmarshal(line, &resp); err != nil {
-		return nil, fmt.Errorf("cmuxCall: unmarshal: %w", err)
+		preview := string(line)
+		if len(preview) > 200 {
+			preview = preview[:200]
+		}
+		return nil, fmt.Errorf("cmuxCall: unmarshal: %w (raw[%d]: %q)", err, len(line), preview)
 	}
 	if !resp.OK {
 		if resp.Error != nil {
